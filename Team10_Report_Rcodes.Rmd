@@ -1,0 +1,333 @@
+---
+title: "Heart Disease Predictive Project"
+author: "Page Freeman, Tianji Lukins, Pat Kavanagh"
+date: "2023-10-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load the data
+```{r}
+heart.df <- read.csv("Heart_Disease_Prediction.csv")
+
+```
+
+Exploration/cleaning of data
+```{r}
+#looking at dataset
+head(heart.df)
+tail(heart.df)
+dim(heart.df)
+
+#taking out index column
+heart.df <- heart.df[ , -1]
+
+#checking for NA values
+sum(is.na(heart.df)) #0
+
+#Renaming columns to take out spaces
+names(heart.df) <- gsub("\\s+", ".", names(heart.df))
+
+```
+
+
+Introduction to data
+```{r}
+#Variable names
+t(t(names(heart.df)))
+
+#summary stats of variables: age, BP, Cholesterol
+summary(heart.df$Age)
+summary(heart.df$BP)
+summary(heart.df$Cholesterol)
+
+```
+
+Factoring the Cateogrical variables (Data Reduction)
+```{r}
+
+#creating duplicate dataframe with categorical dummy variables 
+heart.df1 <- heart.df
+
+#sex - column 2
+heart.df$Sex <- factor(heart.df$Sex, levels = c(0,1),
+                                   labels = c("Female", "Male"))
+
+#chest pain type - column 3
+heart.df$Chest.pain.type <- factor(heart.df$Chest.pain.type, levels = c(1,2,3,4),
+                                   labels = c("Typical Angina", "Atypical Angina", "Non-Anginal Pain", "Asymptomatic"))
+#EKG results - 
+heart.df$EKG.results <- factor(heart.df$EKG.results, levels = c(0,2),
+                                   labels = c("Normal","Abnormal"))
+
+#FBS over 120
+heart.df$FBS.over.120 <- factor(heart.df$FBS.over.120, levels = c(0,1),
+                                   labels = c("False", "True"))
+
+#Exercise angina
+heart.df$Exercise.angina <- factor(heart.df$Exercise.angina, levels = c(0,1),
+                                   labels = c("No", "Yes"))
+
+#Slope of ST 
+heart.df$Slope.of.ST <- factor(heart.df$Slope.of.ST, levels = c(1,2,3),
+                                   labels = c("Flat", "Upsloping", "Downsloping"))
+
+#thallium
+heart.df$Thallium <- factor(heart.df$Thallium, levels = c(3,6,7),
+                            labels = c("Normal", "Fixed defect", "Reversible defect"))
+                                   
+
+#Heart disease
+heart.df$Heart.Disease <- ifelse(heart.df$Heart.Disease == "Presence", 1, 0)
+
+#2 NAs in EKG results that are not normal or abnormal - removing these 2 rows 
+sum(is.na(heart.df$EKG.results))
+
+heart.df <- na.omit(heart.df)
+```
+
+
+Data Visualization
+
+bar graphs - categorical variables 
+scatterplot - relationship between numerical 
+histogram - distribution of outcome variable
+boxplot - side by side is useful for comparing
+
+Basic graphs for visualization
+```{r}
+
+#Scatter plots
+  #somewhat positive correlation 
+plot(heart.df$Age, heart.df$Cholesterol)
+
+  #somewhat negative correlation
+plot(heart.df$Age, heart.df$Max.HR, log = "y")
+
+  #all over the place
+plot(heart.df$Age, heart.df$ST.depression, log = "xy")
+
+#bar chart to show mean cholesterol for gender 
+data.for.plot <- aggregate(heart.df$Cholesterol, by = list(heart.df$Sex), FUN = mean)
+names(data.for.plot) <- c("Sex", "Cholesterol")
+barplot(data.for.plot$Cholesterol, names.arg = data.for.plot$Sex, xlab = "Gender", ylab = "Mean Cholesterol")
+
+#Boxplot
+boxplot(heart.df$Age ~ heart.df$EKG.results)
+
+#Historgram of Age
+hist(heart.df$Age, xlab = "Age", main = "Distribution of Age")
+
+
+
+```
+
+
+Predictive Performance
+
+- looking at how predictors can predict presence of heart disease and accuracy based on actual records  
+
+```{r}
+library(forecast)
+
+#categorical variables = -c(2,3,6, 7, 9, 11, 13, 14)
+
+#training and validation datasets - 60% training/ 40% validation
+set.seed(123)
+train.rows <- sample(1:dim(heart.df)[1], 162) 
+#taking out heart disease presence column
+train.df<-heart.df[train.rows,]
+
+
+valid.df <- heart.df[-train.rows,]
+
+
+#logistic reg model for all predictors of heart disease
+logit.reg <- glm(Heart.Disease ~ ., data = train.df, family = "binomial") 
+options(scipen=999)
+summary(logit.reg)
+#most significant (** NOT ***) is thallium reversible defect and # of vessels fluoro 
+
+# use predict() with type = "response" to compute predicted probabilities. 
+logit.reg.pred <- predict(logit.reg, valid.df[, -14], type = "response")
+
+#first 10 records with actual and predicted records
+data.frame(actual = valid.df$Heart.Disease[1:10], predicted = logit.reg.pred[1:10])
+
+
+
+#assigning predicted class = 1 for predicted probability > cutoff and 0 otherwise (cutoff = 0.5)
+cutoff <- 0.5
+pred_class <- ifelse(logit.reg.pred> cutoff, 1, 0)
+options(scipen=999)
+head(data.frame(logit.reg.pred, pred_class, valid.df$Heart.Disease), 10)
+
+
+#confusion matrix 
+library(caret)
+confusionMatrix(as.factor(pred_class), as.factor(valid.df$Heart.Disease))
+#accuracy of 0.7925
+
+#We would rather have false positives (high specificity = less false positives) and NO false negatives (high sensitivity = less false negatives). In this context, false negatives are people we say don't have heart disease when they do and that is worse than saying that have heart disease when they don't (false positive)
+
+#specificity = 0.7708
+#sensitivity = 0.8103
+
+```
+Finding the most important predictors in our logistic regression model 
+-- to solve multicollinearity, removing extreme redundancies by dropping predictors via variable selection 
+```{r}
+#selecting subsets of predictors 
+
+library(leaps)
+
+#Exhaustive search -
+exhaustive.search <- regsubsets(Heart.Disease ~., data = train.df, nvmax = dim(train.df)[2], method = "exhaustive")
+sum <- summary(exhaustive.search)
+sum
+sum$which
+sum$adjr2
+#based on exhaustive, pick 11 predictors
+
+
+#forward selection
+#model with no predictors for bottom of range search
+heart.lm.null <- glm(Heart.Disease~1, data = train.df)
+
+#step() to run forward selection
+forward <- step(heart.lm.null, scope = list(lower = heart.lm.null, upper = logit.reg), direction = "forward")
+
+summary(forward)
+#6 predictors
+
+#Backward Selection
+backward <- step(logit.reg, direction = "backward")
+summary(backward)
+
+#9 predictors 
+
+#stepwise 
+heart.step <- step(logit.reg, direction = "both")
+summary(heart.step)
+
+#9 predictors 
+
+
+
+
+```
+
+Choosing to look at 9 predictors  
+```{r}
+new.heart <- glm(formula = Heart.Disease ~ Sex + Chest.pain.type + BP + Cholesterol + FBS.over.120 + EKG.results + Slope.of.ST + Number.of.vessels.fluro + Thallium, family = "binomial", data = train.df)
+
+options(scipen=999)
+summary(new.heart)
+
+
+
+# use predict() with type = "response" to compute predicted probabilities. 
+logit.pred2 <- predict(new.heart, valid.df[, -14], type = "response")
+
+#first 10 records with actual and predicted records
+data.frame(actual = valid.df$Heart.Disease[1:10], predicted = logit.pred2[1:10])
+
+
+#assigning predicted class = 1 for predicted probability > cutoff and 0 otherwise (cutoff = 0.5)
+cutoff <- 0.5
+pred_class2 <- ifelse(logit.pred2> cutoff, 1, 0)
+options(scipen=999)
+head(data.frame(logit.pred2, pred_class2, valid.df$Heart.Disease), 10)
+
+
+#confusion matrix 
+library(caret)
+confusionMatrix(as.factor(pred_class2), as.factor(valid.df$Heart.Disease))
+
+#SAME accuracy = 0.7925
+#SAME specificity and sensitivity
+
+
+
+```
+
+What if we did logistic regression with 6 predictors?
+```{r}
+heart6 <- glm(formula = Heart.Disease ~ Thallium + Number.of.vessels.fluro + 
+    Chest.pain.type + Slope.of.ST + Cholesterol + Sex, family = "binomial", data = train.df)
+
+options(scipen=999)
+summary(heart6)
+
+
+# use predict() with type = "response" to compute predicted probabilities. 
+logit.pred6 <- predict(heart6, valid.df[, -14], type = "response")
+
+#first 10 records with actual and predicted records
+data.frame(actual = valid.df$Heart.Disease[1:10], predicted = logit.pred6[1:10])
+
+
+#assigning predicted class = 1 for predicted probability > cutoff and 0 otherwise (cutoff = 0.5)
+cutoff <- 0.5
+pred_class6 <- ifelse(logit.pred6> cutoff, 1, 0)
+options(scipen=999)
+head(data.frame(logit.pred6, pred_class6, valid.df$Heart.Disease), 10)
+
+
+#confusion matrix 
+library(caret)
+confusionMatrix(as.factor(pred_class6), as.factor(valid.df$Heart.Disease))
+
+#accuracy = 0.8019 - higher than og
+#specificity = 0.7917 - higher than og 
+#sensitivity = 0.8103 - same 
+
+
+```
+Model with 10 predictors 
+```{r}
+heart10 <- glm(formula = Heart.Disease ~ Sex + Chest.pain.type + BP + Cholesterol + FBS.over.120 + EKG.results + Max.HR + Slope.of.ST + Number.of.vessels.fluro + Thallium, family = "binomial", data = train.df)
+
+options(scipen=999)
+summary(heart10)
+
+
+# use predict() with type = "response" to compute predicted probabilities. 
+logit.pred10 <- predict(heart10, valid.df[, -14], type = "response")
+
+#first 10 records with actual and predicted records
+data.frame(actual = valid.df$Heart.Disease[1:10], predicted = logit.pred10[1:10])
+
+
+#assigning predicted class = 1 for predicted probability > cutoff and 0 otherwise (cutoff = 0.5)
+cutoff <- 0.5
+pred_class10 <- ifelse(logit.pred10> cutoff, 1, 0)
+options(scipen=999)
+head(data.frame(logit.pred10, pred_class10, valid.df$Heart.Disease), 10)
+
+
+#confusion matrix 
+library(caret)
+confusionMatrix(as.factor(pred_class10), as.factor(valid.df$Heart.Disease))
+
+#accuracy = 0.8019 - same as 6 predictors
+#specificity = 0.7917
+#sensitivity = 0.8103
+```
+Based on accuracy, sensitivity, and specificity, models with 6 or 10 predictors had the highest in all three categories. Since everything is uniform, we are going to pick the model with the least amount of predictors.
+
+We will choose the most significant predictors based on the forward selection model
+```{r}
+summary(forward)
+
+#most significant is Thallium - reversible defect, Number of vessels fluro, and slope of ST - Upsloping 
+```
+
+
+
+
+
+
